@@ -110,7 +110,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ state, dispatch }) =
                 <Zap className="w-5 h-5 text-white fill-white" />
             </div>
             <div>
-                <h1 className="font-bold text-lg leading-none tracking-tight">HeroShot</h1>
+                <h1 className="font-bold text-lg leading-none tracking-tight">小红书主图生成器</h1>
             </div>
         </div>
       </div>
