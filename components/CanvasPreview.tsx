@@ -1,8 +1,8 @@
 
 import React, { useRef, useState } from 'react';
-import { AspectRatio, CoverState } from '../types';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Download, Sparkles, SendHorizontal, ArrowLeft, Share2 } from 'lucide-react';
+import { AspectRatio, CoverState, ToolMode, ViralLayout } from '../types';
+import { motion } from 'framer-motion';
+import { Download, Sparkles, SendHorizontal, ArrowLeft } from 'lucide-react';
 import { interpretEditCommand, generateCoverImage } from '../services/geminiService';
 import html2canvas from 'html2canvas';
 
@@ -38,23 +38,22 @@ export const CanvasPreview: React.FC<CanvasPreviewProps> = ({ state, dispatch })
   };
 
   const handleMagicEdit = async () => {
-      if (!magicInput.trim()) return;
+      if (!magicInput.trim() || !state.apiKey) return;
       setIsMagicLoading(true);
       try {
-          const result = await interpretEditCommand(magicInput, state.activePrompt, state.textScale);
+          const result = await interpretEditCommand(state.apiKey, magicInput, state.activePrompt, state.textScale);
           if (result.action === 'UPDATE_STYLE' && result.updates) {
               if (result.updates.textScale) dispatch({ type: 'SET_TEXT_SCALE', payload: result.updates.textScale });
-              // Simple heuristic to apply color to title if specific color mentioned, can be expanded
-              if (result.updates.textColor) dispatch({ type: 'SET_TITLE_COLOR', payload: result.updates.textColor }); 
           } else if (result.action === 'REGENERATE' && result.updates?.newPrompt) {
               dispatch({ type: 'SET_IS_GENERATING', payload: true });
               dispatch({ type: 'SET_ACTIVE_PROMPT', payload: result.updates.newPrompt });
-              const url = await generateCoverImage({
+              const url = await generateCoverImage(state.apiKey, {
                   activePrompt: result.updates.newPrompt,
                   aspectRatio: state.aspectRatio,
                   subjectImage: state.subjectImage,
                   referenceImage: state.referenceImage,
-                  themeMode: state.themeMode
+                  toolMode: state.toolMode,
+                  viralLayout: state.viralLayout
               });
               dispatch({ type: 'SET_GENERATED_IMAGE', payload: url });
               dispatch({ type: 'SET_IS_GENERATING', payload: false });
@@ -67,24 +66,119 @@ export const CanvasPreview: React.FC<CanvasPreviewProps> = ({ state, dispatch })
           setIsMagicLoading(false);
       }
   };
-
-  const isLightColor = (hex: string) => {
-      const c = hex.substring(1);      
-      const rgb = parseInt(c, 16);   
-      const r = (rgb >> 16) & 0xff;  
-      const g = (rgb >>  8) & 0xff;  
-      const b = (rgb >>  0) & 0xff;  
-      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b; 
-      return luma > 128;
-  };
   
-  const footerBgColor = isLightColor(state.footerColor) ? 'black' : 'white';
-  const footerTextColor = state.footerColor;
+  // Default Text Colors (Since user removed pickers, we use high contrast defaults)
+  // We can assume black or white based on a "default" for now, or just black.
+  // The user said "prompt will have it", but that refers to image. 
+  // For overlay text, we default to standard black/dark grey, but maybe allow magic edit to change?
+  // For now, let's stick to a clean Dark Grey for main, lighter for sub.
+  const titleColor = '#000000';
+  const subtitleColor = '#444444';
+  const footerColor = '#FFFFFF';
+  const footerBgColor = '#000000';
+
+  // Aspect Ratio to float mapping for inline styles to ensure immediate update
+  const getAspectRatioStyle = () => {
+    switch(state.aspectRatio) {
+      case AspectRatio.PORTRAIT: return { aspectRatio: '3/4' };
+      case AspectRatio.SQUARE: return { aspectRatio: '1/1' };
+      case AspectRatio.WIDE_2_35: return { aspectRatio: '2.35/1' };
+      case AspectRatio.STORY_9_16: return { aspectRatio: '9/16' };
+      case AspectRatio.VIDEO_4_3: return { aspectRatio: '4/3' };
+      default: return { aspectRatio: '3/4' };
+    }
+  };
+
+  // Render Layouts based on Viral Layout Strategy
+  const renderTextLayer = () => {
+    // Default / Product Gen / Classic Mode
+    if (state.toolMode === ToolMode.PRODUCT_GEN || state.viralLayout === ViralLayout.CLASSIC) {
+      return (
+        <div className="absolute inset-0 z-10 p-[8%] flex flex-col justify-between items-center text-center pointer-events-none">
+            <div className="flex flex-col gap-[1.5em] mt-4 w-full">
+                <h1 
+                    className="font-bold leading-[1.1] whitespace-pre-wrap break-words"
+                    style={{ fontSize: `${2 * state.textScale}rem`, color: titleColor, textShadow: '0 2px 20px rgba(255,255,255,0.5)' }}
+                >{state.title}</h1>
+                <h2 
+                    className="font-medium tracking-wide opacity-90 whitespace-pre-wrap break-words"
+                    style={{ fontSize: `${0.9 * state.textScale}rem`, color: subtitleColor }}
+                >{state.subtitle}</h2>
+            </div>
+            <div className="mb-2">
+                <span 
+                    className="font-bold tracking-[0.2em] uppercase px-[1em] py-[0.5em] rounded-md shadow-sm inline-block"
+                    style={{ fontSize: `${0.7 * state.textScale}rem`, backgroundColor: footerBgColor, color: footerColor }}
+                >{state.footer}</span>
+            </div>
+        </div>
+      );
+    }
+
+    // Split Layout (Text on Right)
+    if (state.viralLayout === ViralLayout.SPLIT) {
+       return (
+         <div className="absolute inset-0 z-10 flex pointer-events-none">
+            <div className="w-[60%] h-full" /> {/* Spacer for image */}
+            <div className="w-[40%] h-full flex flex-col justify-center items-start pl-2 pr-6">
+                 <h1 className="font-bold leading-tight mb-4 text-left"
+                    style={{ fontSize: `${1.8 * state.textScale}rem`, color: titleColor }}
+                 >{state.title}</h1>
+                 <h2 className="font-medium opacity-80 text-left mb-8"
+                    style={{ fontSize: `${0.8 * state.textScale}rem`, color: subtitleColor }}
+                 >{state.subtitle}</h2>
+                  <span className="font-bold text-[10px] uppercase border-b-2 border-current pb-1"
+                    style={{ color: '#000' }}
+                 >{state.footer}</span>
+            </div>
+         </div>
+       );
+    }
+
+    // Diagonal Layout
+    if (state.viralLayout === ViralLayout.DIAGONAL) {
+        return (
+            <div className="absolute inset-0 z-10 flex flex-col justify-center items-center pointer-events-none overflow-hidden">
+                <div className="transform -rotate-6 bg-white/90 backdrop-blur-sm p-8 w-[120%] flex flex-col items-center justify-center shadow-2xl">
+                    <h1 className="font-black italic tracking-tighter leading-none"
+                        style={{ fontSize: `${2.5 * state.textScale}rem`, color: titleColor }}
+                    >{state.title}</h1>
+                     <h2 className="font-bold uppercase tracking-[0.3em] mt-2"
+                        style={{ fontSize: `${0.8 * state.textScale}rem`, color: subtitleColor }}
+                    >{state.subtitle}</h2>
+                </div>
+                 {state.footer && (
+                    <div className="absolute bottom-6 right-6 transform -rotate-6 bg-black text-white px-4 py-2 font-bold text-xs">
+                        {state.footer}
+                    </div>
+                 )}
+            </div>
+        );
+    }
+
+    // Big Type Layout
+    if (state.viralLayout === ViralLayout.BIG_TYPE) {
+        return (
+             <div className="absolute inset-0 z-10 flex flex-col justify-center items-center p-4 pointer-events-none">
+                 <h1 className="font-black text-center leading-[0.9] tracking-tighter w-full"
+                    style={{ 
+                        fontSize: `${3.5 * state.textScale}rem`, 
+                        color: titleColor,
+                        textShadow: '2px 2px 0px rgba(255,255,255,0.4)' 
+                    }}
+                 >{state.title}</h1>
+                  <span className="mt-6 bg-black text-white px-6 py-2 rounded-full font-bold text-sm tracking-widest">
+                      {state.footer || state.subtitle}
+                  </span>
+             </div>
+        );
+    }
+  };
 
   return (
     <div className="w-full h-full flex flex-col font-['PingFang_SC']">
         
-        {/* Navbar - Only visible on Mobile or when acting as a modal */}
+        {/* Navbar - Only visible on Mobile */}
         <div className="flex-none h-14 px-4 flex md:hidden items-center justify-between bg-white border-b border-neutral-100 shadow-sm z-20">
             <button 
                 onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'EDITOR' })}
@@ -106,10 +200,11 @@ export const CanvasPreview: React.FC<CanvasPreviewProps> = ({ state, dispatch })
                 initial={{ scale: 0.95, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
-                className={`relative bg-white shadow-xl shadow-black/5 rounded-[20px] overflow-hidden flex-none
-                   ${state.aspectRatio === AspectRatio.PORTRAIT ? 'aspect-[3/4] h-[65vh] md:h-[75vh]' : 'aspect-square w-full max-w-[85vw] md:max-w-[65vh]'}
-                `}
-                style={{ backgroundColor: state.themeMode === 'DARK' ? '#000' : '#fff' }}
+                className="relative bg-white shadow-xl shadow-black/5 overflow-hidden flex-none w-full max-w-[85vw] md:max-w-none md:h-[75vh]"
+                style={{ 
+                    backgroundColor: '#fff',
+                    ...getAspectRatioStyle()
+                }}
             >
                 {/* Background Image */}
                 {state.generatedImage ? (
@@ -130,49 +225,13 @@ export const CanvasPreview: React.FC<CanvasPreviewProps> = ({ state, dispatch })
                     </div>
                 )}
 
-                {/* Text Layers */}
-                <div className="absolute inset-0 z-10 p-[8%] flex flex-col justify-between items-center text-center pointer-events-none">
-                    {/* Header Group */}
-                    <div className="flex flex-col gap-[1.5em] mt-4 w-full">
-                        <h1 
-                            className="font-bold leading-[1.1] whitespace-pre-wrap break-words"
-                            style={{ 
-                                fontSize: `${2 * state.textScale}rem`,
-                                color: state.titleColor,
-                                textShadow: '0 2px 20px rgba(0,0,0,0.05)' 
-                            }}
-                        >
-                            {state.title}
-                        </h1>
-                        <h2 
-                            className="font-medium tracking-wide opacity-90 whitespace-pre-wrap break-words"
-                            style={{ 
-                                fontSize: `${0.9 * state.textScale}rem`,
-                                color: state.subtitleColor 
-                            }}
-                        >
-                            {state.subtitle}
-                        </h2>
-                    </div>
+                {/* Dynamic Text Layers */}
+                {renderTextLayer()}
 
-                    {/* Footer Box */}
-                    <div className="mb-2">
-                        <span 
-                            className="font-bold tracking-[0.2em] uppercase px-[1em] py-[0.5em] rounded-md shadow-sm inline-block"
-                            style={{ 
-                                fontSize: `${0.7 * state.textScale}rem`,
-                                backgroundColor: footerBgColor,
-                                color: footerTextColor
-                            }}
-                        >
-                            {state.footer}
-                        </span>
-                    </div>
-                </div>
             </motion.div>
         </div>
 
-        {/* Bottom Actions - Fixed on Desktop Bottom */}
+        {/* Bottom Actions */}
         <div className="bg-white p-4 md:px-8 md:py-6 border-t border-neutral-200">
              <div className="max-w-3xl mx-auto flex flex-col gap-4">
                  {/* Magic Edit Input */}

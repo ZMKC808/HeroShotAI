@@ -1,40 +1,61 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { AspectRatio, ThemeMode } from "../types";
+import { AspectRatio, ViralLayout, ToolMode } from "../types";
 
-// Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getLayoutInstruction = (layout: ViralLayout): string => {
+  switch (layout) {
+    case ViralLayout.SPLIT:
+      return "COMPOSITION: Split composition. Place the main subject/details on the LEFT 60% of the image. Keep the RIGHT 40% extremely clean, solid color, or blurred for text overlay.";
+    case ViralLayout.DIAGONAL:
+      return "COMPOSITION: Dynamic angle. Creates a sense of movement. Ensure the center area has a clear diagonal path for text.";
+    case ViralLayout.BIG_TYPE:
+      return "COMPOSITION: Background must be low-contrast and uncluttered to support massive typography overlay. Darken or lighten the center significantly.";
+    default:
+      return "COMPOSITION: Standard commercial layout. Leave empty space at top (30%) and bottom (20%) for text.";
+  }
+};
 
-const buildPrompt = (activePrompt: string, hasSubject: boolean, themeMode: ThemeMode): string => {
+const buildPrompt = (
+  activePrompt: string, 
+  hasSubject: boolean, 
+  mode: ToolMode,
+  viralLayout: ViralLayout
+): string => {
+  const baseInstruction = mode === ToolMode.VIRAL_COVER 
+    ? getLayoutInstruction(viralLayout)
+    : "COMPOSITION RULES: The top 30% and bottom 20% of the image MUST be relatively empty (negative space).";
+
   return `
-    Create a high-quality, 8k resolution product advertising background.
+    Create a high-quality, 8k resolution image.
     
-    VISUAL DESCRIPTION: 
+    VISUAL STYLE DESCRIPTION: 
     ${activePrompt}
     
-    BACKGROUND COLOR:
-    ${themeMode === 'DARK' ? 'STRICTLY use a BLACK / Dark background.' : 'STRICTLY use a WHITE / Light high-key background.'}
-
     ${hasSubject ? "IMPORTANT: Integrate the provided subject image into this scene naturally as the main hero product." : ""}
     
-    COMPOSITION RULES:
-    1. LEAVE EMPTY SPACE: The top 30% and bottom 20% of the image MUST be relatively empty (negative space) or have very low detail. This is where text will be overlaid.
-    2. AESTHETIC: Photorealistic, commercial photography, high-end studio lighting.
-    3. NO TEXT: Do not generate any text inside the image itself.
+    ${baseInstruction}
+    
+    AESTHETIC: Photorealistic, commercial photography, high-end studio lighting, trending on social media.
+    NO TEXT: Do not generate any text inside the image itself.
   `.trim();
 };
 
 export const generateCoverImage = async (
+  apiKey: string,
   promptParams: {
     activePrompt: string;
     aspectRatio: AspectRatio;
     subjectImage?: string | null;
     referenceImage?: string | null;
-    themeMode: ThemeMode;
+    toolMode: ToolMode;
+    viralLayout: ViralLayout;
   }
 ): Promise<string> => {
-  const { activePrompt, aspectRatio, subjectImage, referenceImage, themeMode } = promptParams;
-  const prompt = buildPrompt(activePrompt, !!subjectImage, themeMode);
+  if (!apiKey) throw new Error("API Key is missing");
+  const ai = new GoogleGenAI({ apiKey });
+
+  const { activePrompt, aspectRatio, subjectImage, referenceImage, toolMode, viralLayout } = promptParams;
+  const prompt = buildPrompt(activePrompt, !!subjectImage, toolMode, viralLayout);
   const modelId = 'gemini-3-pro-image-preview'; 
 
   const config = {
@@ -83,20 +104,49 @@ export const generateCoverImage = async (
   }
 };
 
+export const polishTitle = async (apiKey: string, currentTitle: string): Promise<string> => {
+  if (!apiKey) return currentTitle;
+  const ai = new GoogleGenAI({ apiKey });
+  const modelId = 'gemini-2.5-flash';
+  const prompt = `
+    You are a viral social media expert (Little Red Book/Douyin/TikTok).
+    Rewrite the following product title to be more "clickbaity", emotional, and attractive to young audiences.
+    Keep it under 10 words. Use emojis sparingly if appropriate.
+    Make it punchy.
+    
+    Current Title: "${currentTitle}"
+    
+    Return ONLY the rewritten title string. No quotes.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelId,
+      contents: prompt,
+    });
+    return response.text?.trim() || currentTitle;
+  } catch (e) {
+    console.error("Polish error", e);
+    return currentTitle;
+  }
+};
+
 export interface EditResult {
   action: 'UPDATE_STYLE' | 'REGENERATE' | 'NONE';
   updates?: {
     textScale?: number;
-    textColor?: string;
     newPrompt?: string;
   };
 }
 
 export const interpretEditCommand = async (
+  apiKey: string,
   command: string,
   currentPrompt: string,
   currentScale: number
 ): Promise<EditResult> => {
+  if (!apiKey) return { action: 'NONE' };
+  const ai = new GoogleGenAI({ apiKey });
   const modelId = 'gemini-2.5-flash';
   
   const systemPrompt = `
@@ -109,9 +159,8 @@ export const interpretEditCommand = async (
     User Command: "${command}"
 
     Determine if the user wants to:
-    1. MODIFY TEXT STYLE (Size, Color): Return action 'UPDATE_STYLE'.
-       - For size: return 'textScale' (e.g., "bigger" -> current * 1.2, "smaller" -> current * 0.8).
-       - For color: return 'textColor' as a HEX string (e.g., "#ff0000").
+    1. MODIFY TEXT SIZE: Return action 'UPDATE_STYLE'.
+       - Return 'textScale' (e.g., "bigger" -> current * 1.2, "smaller" -> current * 0.8).
     2. MODIFY IMAGE CONTENT (Background, Objects, Vibe): Return action 'REGENERATE'.
        - Return 'newPrompt': A rewritten full prompt incorporating the user's change.
     
